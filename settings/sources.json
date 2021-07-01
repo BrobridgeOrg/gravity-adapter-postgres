@@ -1,0 +1,28 @@
+{
+	"sources": {
+		"my_postgres": {
+			"disabled": false,
+			"host": "172.17.0.1",
+			"port": 5432,
+			"username": "postgres",
+			"password": "1qaz@WSX",
+			"dbname": "gravity",
+			"param": "sslmode=disable",
+			"initialLoad": true,
+			"//_comment_interval": "query interval unit: seconds",
+			"interval": 1,
+			"slotName": "regression_slot",
+			"//_comment_public.users":"schema.tableName",
+			"tables": {
+				"public.users":{
+					"events": {
+						"snapshot": "accountInitialized",
+						"create": "accountCreated",
+						"update": "accountUpdated",
+						"delete": "accountDeleted"
+					}
+				}
+			}
+		}
+	}
+}
