@@ -78,6 +78,7 @@ func (database *Database) Connect(source *Source) error {
 		DbName:   info.DBName,
 		Param:    info.Param,
 		SlotName: info.SlotName,
+		Interval: info.Interval,
 	}
 
 	database.db = db

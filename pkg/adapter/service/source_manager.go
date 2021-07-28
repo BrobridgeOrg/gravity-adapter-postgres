@@ -20,8 +20,8 @@ type SourceInfo struct {
 	Username    string                 `json:"username"`
 	Password    string                 `json:"password"`
 	DBName      string                 `json:"dbname"`
-	Interval    int                    `json:"interval,omitempty"`
-	Param       string                 `json:"param,omitempty"`
+	Interval    int                    `json:"interval"`
+	Param       string                 `json:"param"`
 	SlotName    string                 `json:"slotName"`
 	Tables      map[string]SourceTable `json:"tables"`
 }
