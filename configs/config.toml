@@ -10,6 +10,10 @@ maxReconnects = -1
 adapterID = "postgres_adapter"
 adapterName = "Postgres Adapter"
 
+# Authentication
+appID = "anonymous"
+accessKey = ""
+
 [source]
 config = "./settings/sources.json"
 
