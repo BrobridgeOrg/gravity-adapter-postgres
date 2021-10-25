@@ -1,192 +1,347 @@
 package parser
 
 import (
+	"encoding/hex"
 	"errors"
-	"io"
 	"strconv"
 	"strings"
+	"time"
+)
+
+var (
+	InvalidErr = errors.New("Invalid Syntax")
 )
 
 type Parser struct {
-	sqlStr      string
-	sqlStrState string
-	token       Token
-	Operation   string
-	Table       string
-	BeforeData  map[string]*Value
-	AfterData   map[string]*Value
+	Operation string
+	Table     string
+	AfterData map[string]interface{}
 }
 
 func NewParser() *Parser {
 	return &Parser{
-		AfterData:  make(map[string]*Value),
-		BeforeData: make(map[string]*Value),
+		AfterData: make(map[string]interface{}),
 	}
 }
 
-func (p *Parser) nextToken() Token {
+func (p *Parser) getString(text string) (string, int, error) {
 
-	if p.sqlStrState == "" {
-		return Token{Err: io.EOF}
+	if text[0] != '\'' {
+		return "", 0, InvalidErr
 	}
 
-	tok, rem := gettok(p.sqlStrState)
-	p.sqlStrState = rem
-	p.token = tok
-
-	return tok
-}
-
-func (p *Parser) getValue(tok Token) (*Value, error) {
-
-	value := NewValue()
-
-	switch tok.Type {
-	case AtomTok:
-
-		// It is NULL
-		v := strings.ToUpper(tok.Value)
-		if v == "NULL" {
-			value.Data = nil
-			break
-		}
-
-		value.Data = tok.Value
-
-	case NumberTok:
-		value.Data = tok.Value
-		if val, err := strconv.ParseFloat(tok.Value, 64); err == nil {
-			value.Data = val
-		}
-	case StringTok:
-		value.Data = tok.Value
-	default:
-		return nil, errors.New("syntax error")
-	}
-
-	return value, nil
-}
-
-func (p *Parser) handleStatement() error {
-
-	// Getting fields
-	var allData []*Value
+	cur := 1
 	for {
 
-		if p.sqlStrState == "" {
-
-			break
+		if len(text[cur:]) == 0 {
+			return "", cur, InvalidErr
 		}
 
-		tok := p.nextToken()
-		if tok.Err == io.EOF {
-			return errors.New("syntax error")
+		// Check quote character in string
+		if i := strings.IndexByte(text[cur:], '\''); i >= 0 {
+
+			if len(text) >= cur+i+2 {
+
+				// It's quote character in string rather than a token
+				if text[cur+i+1] == '\'' {
+					cur += i + 2
+					continue
+				}
+			}
+
+			data := text[1 : cur+i]
+			data = strings.ReplaceAll(data, "\\\"", "\"")
+			data = strings.ReplaceAll(data, "''", "'")
+
+			return data, cur + i + 1, nil
+		}
+	}
+}
+
+func (p *Parser) parseField(text string) (string, error) {
+
+	var fieldName string
+	var fieldType string
+
+	// Getting field name
+	if i := strings.IndexByte(text, '['); i >= 0 {
+		fieldName = text[:i]
+		text = text[i+1:]
+	}
+
+	if len(text) == 0 {
+		return "", InvalidErr
+	}
+
+	// Find separator
+	if i := strings.IndexByte(text, ':'); i > 0 {
+		if text[i-1] != ']' {
+			return "", InvalidErr
 		}
 
-		if tok.Type == EndTok {
-			break
+		// Getting data type
+		fieldType = text[:i-1]
+		text = text[i+1:]
+	}
+
+	if len(text) == 0 {
+		return "", InvalidErr
+	}
+
+	// Getting value
+	switch fieldType {
+	case "boolean":
+
+		// Parse bool
+		if i := strings.IndexByte(text, ' '); i >= 0 {
+			v := text[:i]
+			text = strings.TrimSpace(text[i+1:])
+
+			// Parse
+			val, err := strconv.ParseBool(v)
+			if err != nil {
+				return "", err
+			}
+
+			p.AfterData[fieldName] = val
+
+			return text, nil
+		}
+	case "smallint":
+		fallthrough
+	case "bigint":
+		fallthrough
+	case "integer":
+
+		// Parse integer
+		if i := strings.IndexByte(text, ' '); i >= 0 {
+			v := text[:i]
+			text = strings.TrimSpace(text[i+1:])
+
+			// Parse
+			val, err := strconv.ParseInt(v, 10, 64)
+			if err != nil {
+				return "", err
+			}
+
+			p.AfterData[fieldName] = val
+
+			return text, nil
+		}
+	case "real":
+		fallthrough
+	case "numeric":
+		// TODO: It might be longer
+		fallthrough
+	case "double precision":
+
+		// Parse integer
+		if i := strings.IndexByte(text, ' '); i >= 0 {
+			v := text[:i]
+			text = strings.TrimSpace(text[i+1:])
+
+			// Parse
+			val, err := strconv.ParseFloat(v, 64)
+			if err != nil {
+				return "", err
+			}
+
+			p.AfterData[fieldName] = float64(val)
+
+			return text, nil
+		}
+	case "bytea":
+
+		// Parse string
+		str, cur, err := p.getString(text)
+		if err != nil {
+			return "", err
 		}
 
-		if tok.Type == CloseParenTok {
-			break
+		// Convert to bytes
+		data, err := hex.DecodeString(str[3:])
+		if err != nil {
+			return "", err
 		}
 
-		if tok.Type == CommaTok || tok.Type == BracketTok || tok.Type == ColonTok {
-			continue
+		p.AfterData[fieldName] = data
+
+		text = strings.TrimSpace(text[cur:])
+
+		return text, nil
+	case "money":
+
+		// Parse string
+		str, cur, err := p.getString(text)
+		if err != nil {
+			return "", err
 		}
 
-		value, err := p.getValue(tok)
+		// Skip dollar sign and parse
+		val, err := strconv.ParseFloat(str[1:], 64)
+		if err != nil {
+			return "", err
+		}
+
+		p.AfterData[fieldName] = val
+
+		text = strings.TrimSpace(text[cur:])
+
+		return text, nil
+	case "timestamp without time zone":
+
+		// Parse string
+		str, cur, err := p.getString(text)
+		if err != nil {
+			return "", err
+		}
+
+		str = strings.ReplaceAll(str, " ", "T") + "Z"
+
+		// Parse timestamp
+		t, _ := time.Parse(time.RFC3339Nano, str)
+		if err != nil {
+			return "", err
+		}
+
+		p.AfterData[fieldName] = t
+
+		text = strings.TrimSpace(text[cur:])
+
+		return text, nil
+
+	case "interval":
+		fallthrough
+	case "time without time zone":
+
+		// Parse string
+		str, cur, err := p.getString(text)
+		if err != nil {
+			return "", err
+		}
+
+		p.AfterData[fieldName] = str
+
+		text = strings.TrimSpace(text[cur:])
+
+		return text, nil
+
+	case "date":
+
+		// Parse string
+		str, cur, err := p.getString(text)
+		if err != nil {
+			return "", err
+		}
+
+		// Parse timestamp
+		t, _ := time.Parse("2006-01-02", str)
+		if err != nil {
+			return "", err
+		}
+
+		p.AfterData[fieldName] = t
+
+		text = strings.TrimSpace(text[cur:])
+
+		return text, nil
+
+	case "bit":
+		fallthrough
+	case "bit varying":
+
+		if text[0] != 'B' {
+			return text, InvalidErr
+		}
+
+		text = text[1:]
+
+		// Parse string
+		str, cur, err := p.getString(text)
+		if err != nil {
+			return "", err
+		}
+
+		p.AfterData[fieldName] = str
+
+		text = strings.TrimSpace(text[cur:])
+
+		return text, nil
+
+	default:
+
+		// Parse string
+		str, cur, err := p.getString(text)
+		if err != nil {
+			return "", err
+		}
+
+		p.AfterData[fieldName] = str
+
+		text = strings.TrimSpace(text[cur:])
+
+		return text, nil
+	}
+
+	return "", nil
+}
+
+func (p *Parser) parseFields(text string) error {
+
+	data := text
+	for {
+		t, err := p.parseField(data)
 		if err != nil {
 			return err
 		}
 
-		allData = append(allData, value)
-
-	}
-
-	afterData := make(map[string]*Value, len(allData)/2)
-	tmpField := ""
-	for i, data := range allData {
-		if i%2 == 0 {
-			tmpField = data.Data.(string)
-		} else {
-			afterData[tmpField] = data
+		if len(t) == 0 {
+			break
 		}
-	}
 
-	p.AfterData = afterData
+		data = t
+	}
 
 	return nil
 }
 
-func (p *Parser) Parse(sqlStr string) error {
+func (p *Parser) Parse(source string) error {
 
-	p.sqlStr = sqlStr
-	p.sqlStrState = sqlStr
+	if len(source) < 6 {
+		return InvalidErr
+	}
 
-	// table public.users: INSERT: id[integer]:19 name[character varying]:'ddddd' email[character varying]:'eeeeee'
-	tok := p.nextToken()
-
-	if tok.Err == io.EOF {
+	if source[:6] != "table " {
+		// Ignore
 		return nil
 	}
 
-	if tok.Err != nil {
-		return tok.Err
-	}
+	text := source[6:]
 
 	// Getting table name
-	// public.users: INSERT: id[integer]:19 name[character varying]:'ddddd' email[character varying]:'eeeeee'
-	tok = p.nextToken()
-
-	if tok.Err == io.EOF {
-		return nil
+	if i := strings.IndexByte(text, ':'); i >= 0 {
+		p.Table = text[:i]
+		text = strings.TrimSpace(text[i+1:])
+	} else {
+		return InvalidErr
 	}
 
-	if tok.Err != nil {
-		return tok.Err
+	if len(text) == 0 {
+		return InvalidErr
 	}
 
-	if tok.Type == AtomTok {
-		p.Table = tok.Value
+	// Getting operation
+	if i := strings.IndexByte(text, ':'); i >= 0 {
+		p.Operation = text[:i]
+		text = strings.TrimSpace(text[i+1:])
+	} else {
+		return InvalidErr
 	}
 
-	// : INSERT: id[integer]:19 name[character varying]:'ddddd' email[character varying]:'eeeeee'
-	tok = p.nextToken()
-
-	if tok.Err == io.EOF {
-		return nil
+	if len(text) == 0 {
+		return InvalidErr
 	}
 
-	if tok.Err != nil {
-		return tok.Err
-	}
-
-	// INSERT: id[integer]:19 name[character varying]:'ddddd' email[character varying]:'eeeeee'
-	tok = p.nextToken()
-
-	if tok.Err == io.EOF {
-		return nil
-	}
-
-	if tok.Err != nil {
-		return tok.Err
-	}
-
-	if tok.Type == AtomTok {
-		value := strings.ToUpper(tok.Value)
-		switch value {
-		case "INSERT":
-			p.Operation = "INSERT"
-			return p.handleStatement()
-		case "UPDATE":
-			p.Operation = "UPDATE"
-			return p.handleStatement()
-		case "DELETE":
-			p.Operation = "Delete"
-			return p.handleStatement()
-		}
-	}
-
-	return nil
+	// Parsing fields
+	return p.parseFields(text)
 }
