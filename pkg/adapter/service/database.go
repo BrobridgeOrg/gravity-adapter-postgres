@@ -99,7 +99,7 @@ func (database *Database) WatchEvents(tables map[string]SourceTable, interval in
 
 		//get tableInfo
 		//tableInfo := database.tableInfo[tableName]
-		go func() {
+		go func(tableName string) {
 			for {
 				// query
 				sqlStr := fmt.Sprintf(`SELECT * FROM pg_logical_slot_get_changes('%s', NULL, NULL);`,
@@ -129,8 +129,6 @@ func (database *Database) WatchEvents(tables map[string]SourceTable, interval in
 						if err == UnsupportEventType {
 							log.Warn("Skip event ...")
 							continue
-						} else if err == CommitEventType || err == BeginEventType {
-							continue
 						} else {
 							log.Error(err)
 							// delay
@@ -149,7 +147,7 @@ func (database *Database) WatchEvents(tables map[string]SourceTable, interval in
 				continue
 
 			}
-		}()
+		}(tableName)
 	}
 	return nil
 

@@ -2,7 +2,6 @@ package adapter
 
 import (
 	"errors"
-	"strings"
 
 	parser "git.brobridge.com/gravity/gravity-adapter-postgres/pkg/adapter/service/parser"
 )
@@ -18,122 +17,51 @@ const (
 
 var (
 	UnsupportEventType = errors.New("Unsupported operation")
-	BeginEventType     = errors.New("Skip BEGIN event")
-	CommitEventType    = errors.New("Skip COMMIT event")
 )
 
 type CDCEvent struct {
 	Time      int64
 	Operation OperationType
 	Table     string
-	After     map[string]*parser.Value
-	Before    map[string]*parser.Value
-}
-
-func (database *Database) parseInsertSQL(tableName string, event string) (*CDCEvent, error) {
-
-	p := parser.NewParser()
-	err := p.Parse(event)
-	if err != nil {
-		return nil, err
-	}
-
-	// Prepare CDC event
-	result := CDCEvent{
-		Operation: InsertOperation,
-		Table:     p.Table,
-		After:     p.AfterData,
-		Before:    p.BeforeData,
-	}
-
-	return &result, nil
-}
-
-func (database *Database) parseUpdateSQL(tableName string, event string) (*CDCEvent, error) {
-
-	// Prepare CDC event
-	p := parser.NewParser()
-	err := p.Parse(event)
-	if err != nil {
-		return nil, err
-	}
-
-	// Prepare CDC event
-	result := CDCEvent{
-		Operation: UpdateOperation,
-		Table:     p.Table,
-		After:     p.AfterData,
-		Before:    p.BeforeData,
-	}
-
-	return &result, nil
-
-}
-
-func (database *Database) parseDeleteSQL(tableName string, event string) (*CDCEvent, error) {
-
-	// Prepare CDC event
-	p := parser.NewParser()
-	err := p.Parse(event)
-	if err != nil {
-		return nil, err
-	}
-
-	// Prepare CDC event
-	result := CDCEvent{
-		Operation: DeleteOperation,
-		Table:     p.Table,
-		After:     p.AfterData,
-		Before:    p.BeforeData,
-	}
-
-	return &result, nil
-
+	After     map[string]interface{}
+	Before    map[string]interface{}
 }
 
 func (database *Database) processEvent(tableName string, event map[string]interface{}) (*CDCEvent, error) {
 
-	cdcEvent := event["data"].(string)
-
-	insertEvent := strings.Index(cdcEvent, ": INSERT: ")
-	if insertEvent >= 0 {
-		//Insert Event
-		return database.parseInsertSQL(tableName, cdcEvent)
+	// Parse event
+	p := parser.NewParser()
+	err := p.Parse(event["data"].(string))
+	if err != nil {
+		return nil, err
 	}
 
-	updateEvent := strings.Index(cdcEvent, ": UPDATE: ")
-	if updateEvent >= 0 {
-		//Update Before Event
-		return database.parseUpdateSQL(tableName, cdcEvent)
+	// Prepare CDC event
+	e := &CDCEvent{
+		Operation: InsertOperation,
+		Table:     p.Table,
+		After:     p.AfterData,
 	}
 
-	deleteEvent := strings.Index(cdcEvent, ": DELETE: ")
-	if deleteEvent >= 0 {
-		//Delete Event
-		return database.parseDeleteSQL(tableName, cdcEvent)
+	switch p.Operation {
+	case "INSERT":
+		e.Operation = InsertOperation
+	case "UPDATE":
+		e.Operation = UpdateOperation
+	case "DELETE":
+		e.Operation = DeleteOperation
+	default:
+		// Unknown operation
+		return nil, UnsupportEventType
 	}
 
-	beginEvent := strings.Index(cdcEvent, "BEGIN ")
-	if beginEvent >= 0 {
-		// Skip begin type
-		return nil, BeginEventType
-	}
-
-	commitEvent := strings.Index(cdcEvent, "COMMIT ")
-	if commitEvent >= 0 {
-		// Skip begin type
-		return nil, CommitEventType
-	}
-
-	return nil, UnsupportEventType
+	return e, nil
 }
 
 func (database *Database) processSnapshotEvent(tableName string, eventPayload map[string]interface{}) *CDCEvent {
-	afterValue := make(map[string]*parser.Value)
+	afterValue := make(map[string]interface{})
 	for key, value := range eventPayload {
-		afterValue[key] = &parser.Value{
-			Data: value,
-		}
+		afterValue[key] = value
 	}
 
 	result := CDCEvent{

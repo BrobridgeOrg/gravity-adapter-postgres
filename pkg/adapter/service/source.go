@@ -276,11 +276,11 @@ func (source *Source) prepareRequest(event *CDCEvent) *Request {
 	// Prepare payload
 	data := make(map[string]interface{}, len(event.Before)+len(event.After))
 	for k, v := range event.Before {
-		data[k] = v.Data
+		data[k] = v
 	}
 
 	for k, v := range event.After {
-		data[k] = v.Data
+		data[k] = v
 	}
 
 	payload, err := json.Marshal(data)
