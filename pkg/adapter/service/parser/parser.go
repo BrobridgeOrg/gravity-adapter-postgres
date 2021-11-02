@@ -3,6 +3,7 @@ package parser
 import (
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +23,14 @@ func NewParser() *Parser {
 	return &Parser{
 		AfterData: make(map[string]interface{}),
 	}
+}
+
+func (p *Parser) unescape(text string) string {
+	text = strings.ReplaceAll(text, "\\\\", "\\")
+	text = strings.ReplaceAll(text, "\\\"", "\"")
+	text = strings.ReplaceAll(text, "\\,", ",")
+	text = strings.ReplaceAll(text, "''", "'")
+	return text
 }
 
 func (p *Parser) getString(text string) (string, int, error) {
@@ -50,12 +59,188 @@ func (p *Parser) getString(text string) (string, int, error) {
 			}
 
 			data := text[1 : cur+i]
-			data = strings.ReplaceAll(data, "\\\"", "\"")
-			data = strings.ReplaceAll(data, "''", "'")
 
-			return data, cur + i + 1, nil
+			return p.unescape(data), cur + i + 1, nil
 		}
 	}
+}
+
+func (p *Parser) getArrayElementString(text string) (string, string, error) {
+
+	if text[0] != '"' {
+		return "", text, InvalidErr
+	}
+
+	cur := 1
+	for {
+
+		if len(text[cur:]) == 0 {
+			return "", text[cur:], InvalidErr
+		}
+
+		// Check quote character in string
+		if i := strings.IndexByte(text[cur:], '"'); i >= 0 {
+
+			if cur > 0 {
+
+				// It's quote character in string rather than a token
+				if text[cur+i-1] == '\\' {
+					cur += i + 1
+					continue
+				}
+			}
+
+			data := text[1 : cur+i]
+
+			return p.unescape(data), text[cur+i+1:], nil
+		}
+	}
+}
+
+func (p *Parser) parseValue(valueType string, text string) (interface{}, error) {
+
+	switch valueType {
+	case "boolean":
+		// Parse
+		val, err := strconv.ParseBool(text)
+		if err != nil {
+			return "", err
+		}
+
+		return val, nil
+	case "smallint":
+		fallthrough
+	case "bigint":
+		fallthrough
+	case "integer":
+
+		// Parse
+		val, err := strconv.ParseInt(text, 10, 64)
+		if err != nil {
+			return "", err
+		}
+
+		return val, nil
+	case "real":
+		fallthrough
+	case "numeric":
+		// TODO: It might be longer
+		fallthrough
+	case "double precision":
+
+		// Parse integer
+		if i := strings.IndexByte(text, ' '); i >= 0 {
+			v := text[:i]
+			text = strings.TrimSpace(text[i+1:])
+
+			// Parse
+			val, err := strconv.ParseFloat(v, 64)
+			if err != nil {
+				return "", err
+			}
+
+			return float64(val), nil
+		}
+	}
+
+	return p.unescape(text), nil
+}
+func (p *Parser) parseArrayElement(valueType string, text string) (interface{}, string, error) {
+
+	// It is array
+	if text[0] == '{' {
+		return p.parseArrayElements(valueType, text)
+	}
+
+	// Element is simple value
+	if text[0] != '"' {
+
+		source := text
+
+		// Finding separator character
+		for cur := 0; cur < len(source); cur++ {
+			switch source[cur] {
+			case ',':
+				// End of this element
+
+				// Parse content
+				value, err := p.parseValue(valueType, source[:cur])
+				if err != nil {
+					return nil, text, err
+				}
+
+				return value, source[cur:], nil
+			case '}':
+				// End of array
+
+				// Parse content
+				value, err := p.parseValue(valueType, source[:cur])
+				if err != nil {
+					return nil, text, err
+				}
+
+				return value, source[cur:], nil
+			}
+		}
+
+		return nil, source, errors.New("Invalid array element")
+	}
+
+	// Element is string
+	value, source, err := p.getArrayElementString(text)
+	if err != nil {
+		return nil, source, errors.New("Invalid array element")
+	}
+
+	return value, source, nil
+}
+
+func (p *Parser) parseArrayElements(valueType string, text string) ([]interface{}, string, error) {
+
+	source := text[1:]
+	values := make([]interface{}, 0)
+
+	// Parsing each element
+	for len(source) > 0 {
+
+		value, newSource, err := p.parseArrayElement(valueType, source)
+		if err != nil {
+			return nil, newSource, err
+		}
+
+		values = append(values, value)
+
+		if len(newSource) == 0 {
+			source = newSource
+			break
+		}
+
+		switch newSource[0] {
+		case ',':
+			fallthrough
+		case '}':
+			source = newSource[1:]
+			break
+		}
+	}
+
+	return values, source, nil
+}
+
+func (p *Parser) parseArray(valueType string, text string) ([]interface{}, error) {
+
+	if text[0] != '{' || text[len(text)-1] != '}' {
+		return nil, fmt.Errorf("%v: Not valid array value", InvalidErr)
+	}
+
+	//source := text[1 : len(text)-1]
+
+	value, source, err := p.parseArrayElements(valueType, text)
+	if err != nil {
+		return nil, fmt.Errorf("%v: %s\n", err, source)
+	}
+
+	return value, nil
 }
 
 func (p *Parser) parseField(text string) (string, error) {
@@ -86,6 +271,29 @@ func (p *Parser) parseField(text string) (string, error) {
 
 	if len(text) == 0 {
 		return "", InvalidErr
+	}
+
+	// Check whether array type
+	if strings.Contains(fieldType, "[]") {
+		valueType := fieldType[:len(fieldType)-2]
+
+		// Parse string
+		str, cur, err := p.getString(text)
+		if err != nil {
+			return text, err
+		}
+
+		text = strings.TrimSpace(text[cur:])
+
+		// Parse array string
+		value, err := p.parseArray(valueType, str)
+		if err != nil {
+			return "", err
+		}
+
+		p.AfterData[fieldName] = value
+
+		return text, nil
 	}
 
 	// Getting value
@@ -159,7 +367,7 @@ func (p *Parser) parseField(text string) (string, error) {
 		}
 
 		// Convert to bytes
-		data, err := hex.DecodeString(str[3:])
+		data, err := hex.DecodeString(str[2:])
 		if err != nil {
 			return "", err
 		}

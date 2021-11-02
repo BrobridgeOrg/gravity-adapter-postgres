@@ -241,7 +241,7 @@ func TestParseBitTypes(t *testing.T) {
 
 func TestParseArrayTypes(t *testing.T) {
 
-	source := `table public.users: INSERT: json1[json]:'{\"aa\":\"bb\"}' intarr[integer[]]:'{1,2,3}'`
+	source := `table public.users: INSERT: json1[json]:'{\"aa\":\"bb\"}' intarr[integer[]]:'{1,2,3}' varchararr1[character varying[]]:'{meeting,lunch}' varchararr2[character varying[]]:'{\"meeting\",\"lunch\",\"aaa\\\"aaa\",{second,\"xxx\"},test}' varchararr3[character varying[]]:'{\"aaa\,aaa\",bbb}'`
 
 	parser := NewParser()
 
@@ -251,7 +251,22 @@ func TestParseArrayTypes(t *testing.T) {
 	}
 
 	assert.Equal(t, "{\"aa\":\"bb\"}", parser.AfterData["json1"].(string))
-	assert.Equal(t, "{1,2,3}", parser.AfterData["intarr"].(string))
+
+	assert.Equal(t, int64(1), parser.AfterData["intarr"].([]interface{})[0].(int64))
+	assert.Equal(t, int64(2), parser.AfterData["intarr"].([]interface{})[1].(int64))
+	assert.Equal(t, int64(3), parser.AfterData["intarr"].([]interface{})[2].(int64))
+
+	assert.Equal(t, "meeting", parser.AfterData["varchararr1"].([]interface{})[0].(string))
+	assert.Equal(t, "lunch", parser.AfterData["varchararr1"].([]interface{})[1].(string))
+
+	assert.Equal(t, "meeting", parser.AfterData["varchararr2"].([]interface{})[0].(string))
+	assert.Equal(t, "lunch", parser.AfterData["varchararr2"].([]interface{})[1].(string))
+	assert.Equal(t, "aaa\"aaa", parser.AfterData["varchararr2"].([]interface{})[2].(string))
+
+	assert.Equal(t, "second", parser.AfterData["varchararr2"].([]interface{})[3].([]interface{})[0].(string))
+
+	assert.Equal(t, "aaa,aaa", parser.AfterData["varchararr3"].([]interface{})[0].(string))
+
 }
 
 func TestParseSpecialTypes(t *testing.T) {
