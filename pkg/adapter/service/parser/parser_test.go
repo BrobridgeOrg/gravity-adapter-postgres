@@ -241,7 +241,7 @@ func TestParseBitTypes(t *testing.T) {
 
 func TestParseArrayTypes(t *testing.T) {
 
-	source := `table public.users: INSERT: json1[json]:'{\"aa\":\"bb\"}' intarr[integer[]]:'{1,2,3}' varchararr1[character varying[]]:'{meeting,lunch}' varchararr2[character varying[]]:'{\"meeting\",\"lunch\",\"aaa\\\"aaa\",{second,\"xxx\"},test}' varchararr3[character varying[]]:'{\"aaa\,aaa\",bbb}'`
+	source := `table public.users: INSERT: json1[json]:'{"aa":"bb"}' intarr[integer[]]:'{1,2,3}' varchararr1[character varying[]]:'{meeting,lunch}' varchararr2[character varying[]]:'{"meeting","lunch","aaa\"aaa",{second,"xxx"},test}' varchararr3[character varying[]]:'{"aaa\,aaa",bbb}'`
 
 	parser := NewParser()
 

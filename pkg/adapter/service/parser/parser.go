@@ -33,7 +33,7 @@ func (p *Parser) unescape(text string) string {
 	return text
 }
 
-func (p *Parser) getString(text string) (string, int, error) {
+func (p *Parser) getRawString(text string) (string, int, error) {
 
 	if text[0] != '\'' {
 		return "", 0, InvalidErr
@@ -60,9 +60,19 @@ func (p *Parser) getString(text string) (string, int, error) {
 
 			data := text[1 : cur+i]
 
-			return p.unescape(data), cur + i + 1, nil
+			return data, cur + i + 1, nil
 		}
 	}
+}
+
+func (p *Parser) getString(text string) (string, int, error) {
+
+	value, cur, err := p.getRawString(text)
+	if err != nil {
+		return value, cur, InvalidErr
+	}
+
+	return p.unescape(value), cur, nil
 }
 
 func (p *Parser) getArrayElementString(text string) (string, string, error) {
@@ -85,6 +95,7 @@ func (p *Parser) getArrayElementString(text string) (string, string, error) {
 
 				// It's quote character in string rather than a token
 				if text[cur+i-1] == '\\' {
+
 					cur += i + 1
 					continue
 				}
@@ -278,7 +289,7 @@ func (p *Parser) parseField(text string) (string, error) {
 		valueType := fieldType[:len(fieldType)-2]
 
 		// Parse string
-		str, cur, err := p.getString(text)
+		str, cur, err := p.getRawString(text)
 		if err != nil {
 			return text, err
 		}

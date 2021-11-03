@@ -16,7 +16,7 @@ const (
 )
 
 var (
-	UnsupportEventType = errors.New("Unsupported operation")
+	UnsupportEventTypeErr = errors.New("Unsupported operation")
 )
 
 type CDCEvent struct {
@@ -38,9 +38,8 @@ func (database *Database) processEvent(tableName string, event map[string]interf
 
 	// Prepare CDC event
 	e := &CDCEvent{
-		Operation: InsertOperation,
-		Table:     p.Table,
-		After:     p.AfterData,
+		Table: p.Table,
+		After: p.AfterData,
 	}
 
 	switch p.Operation {
@@ -52,7 +51,7 @@ func (database *Database) processEvent(tableName string, event map[string]interf
 		e.Operation = DeleteOperation
 	default:
 		// Unknown operation
-		return nil, UnsupportEventType
+		return nil, UnsupportEventTypeErr
 	}
 
 	return e, nil

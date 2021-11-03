@@ -126,7 +126,7 @@ func (database *Database) WatchEvents(tables map[string]SourceTable, interval in
 					// Prepare CDC event
 					e, err = database.processEvent(tableName, event)
 					if err != nil {
-						if err == UnsupportEventType {
+						if err == UnsupportEventTypeErr {
 							log.Warn("Skip event ...")
 							continue
 						} else {
