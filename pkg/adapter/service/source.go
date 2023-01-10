@@ -20,6 +20,7 @@ var counter uint64
 type Packet struct {
 	EventName string
 	Payload   []byte
+	lastLSN   string
 }
 
 type Source struct {
@@ -297,6 +298,7 @@ func (source *Source) prepareRequest(event *CDCEvent) *Request {
 	request.Req = &Packet{
 		EventName: eventName,
 		Payload:   payload,
+		lastLSN:   event.LastLSN,
 	}
 
 	return request
@@ -306,7 +308,9 @@ func (source *Source) HandleRequest(request *Request) {
 
 	for {
 		// Using new SDK to re-implement this part
-		err := source.connector.Publish(request.Req.EventName, request.Req.Payload, nil)
+		meta := make(map[string]interface{})
+		meta["Msg-Id"] = fmt.Sprintf("%s-%s-%s", source.name, request.Table, request.Req.lastLSN)
+		err := source.connector.Publish(request.Req.EventName, request.Req.Payload, meta)
 		if err != nil {
 			log.Error("Failed to get publish Request:", err)
 			time.Sleep(time.Second)

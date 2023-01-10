@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"errors"
+	"fmt"
 
 	parser "git.brobridge.com/gravity/gravity-adapter-postgres/pkg/adapter/service/parser"
 )
@@ -25,6 +26,7 @@ type CDCEvent struct {
 	Table     string
 	After     map[string]interface{}
 	Before    map[string]interface{}
+	LastLSN   string
 }
 
 func (database *Database) processEvent(tableName string, event map[string]interface{}) (*CDCEvent, error) {
@@ -53,6 +55,8 @@ func (database *Database) processEvent(tableName string, event map[string]interf
 		// Unknown operation
 		return nil, UnsupportEventTypeErr
 	}
+
+	e.LastLSN = fmt.Sprintf("%s-%s", string(event["lsn"].([]byte)), string(event["xid"].([]byte)))
 
 	return e, nil
 }

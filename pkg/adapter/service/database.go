@@ -180,6 +180,7 @@ func (database *Database) DoInitialLoad(tables map[string]SourceTable, fn func(*
 			log.Error(err)
 		}
 
+		i := 0
 		for rows.Next() {
 			// parse data
 			event := make(map[string]interface{}, 0)
@@ -191,6 +192,8 @@ func (database *Database) DoInitialLoad(tables map[string]SourceTable, fn func(*
 
 			// Prepare CDC event
 			e := database.processSnapshotEvent(tableName, event)
+			i += 1
+			e.LastLSN = fmt.Sprintf("%s-%d", tableName, i)
 			fn(e)
 		}
 
