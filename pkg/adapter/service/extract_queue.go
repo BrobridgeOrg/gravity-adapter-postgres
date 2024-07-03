@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	parser "git.brobridge.com/gravity/gravity-adapter-postgres/pkg/adapter/service/parser"
+	log "github.com/sirupsen/logrus"
 )
 
 type OperationType int8
@@ -18,6 +19,7 @@ const (
 
 var (
 	UnsupportEventTypeErr = errors.New("Unsupported operation")
+	EmptyEventTypeErr     = errors.New("Empty Event Type")
 )
 
 type CDCEvent struct {
@@ -35,6 +37,7 @@ func (database *Database) processEvent(tableName string, event map[string]interf
 	p := parser.NewParser()
 	err := p.Parse(event["data"].(string))
 	if err != nil {
+		log.Error(event["data"].(string))
 		return nil, err
 	}
 
@@ -51,12 +54,19 @@ func (database *Database) processEvent(tableName string, event map[string]interf
 		e.Operation = UpdateOperation
 	case "DELETE":
 		e.Operation = DeleteOperation
+	case "":
+		return nil, EmptyEventTypeErr
 	default:
 		// Unknown operation
+		log.Debug("Skip event:", p.Operation)
 		return nil, UnsupportEventTypeErr
 	}
 
-	e.LastLSN = fmt.Sprintf("%s-%s", string(event["lsn"].([]byte)), string(event["xid"].([]byte)))
+	if _, ok := event["lsn"]; ok {
+		e.LastLSN = fmt.Sprintf("%s-%s", string(event["lsn"].([]byte)), string(event["xid"].([]byte)))
+	} else {
+		e.LastLSN = fmt.Sprintf("%s-%s", string(event["location"].([]byte)), string(event["xid"].([]byte)))
+	}
 
 	return e, nil
 }

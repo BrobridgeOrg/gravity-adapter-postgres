@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -26,6 +27,7 @@ type Database struct {
 	tableInfo   map[string]tableInfo
 	updateEvent map[int64]CDCEvent
 	source      *Source
+	stopping    bool
 }
 
 type tableInfo struct {
@@ -37,6 +39,7 @@ func NewDatabase() *Database {
 		dbInfo:      &DatabaseInfo{},
 		tableInfo:   make(map[string]tableInfo, 0),
 		updateEvent: make(map[int64]CDCEvent, 0),
+		stopping:    false,
 	}
 }
 
@@ -109,7 +112,8 @@ func (database *Database) WatchEvents(tables map[string]SourceTable, interval in
 				//log.Info(sqlStr)
 				rows, err := database.db.Queryx(sqlStr)
 				if err != nil {
-					log.Error(err)
+					log.Error("slot: ", err)
+					time.Sleep(time.Duration(database.dbInfo.Interval) * time.Second)
 					continue
 				}
 
@@ -127,7 +131,9 @@ func (database *Database) WatchEvents(tables map[string]SourceTable, interval in
 					e, err = database.processEvent(tableName, event)
 					if err != nil {
 						if err == UnsupportEventTypeErr {
-							log.Warn("Skip event ...")
+							log.Debug("Skip event ...")
+							continue
+						} else if err == EmptyEventTypeErr {
 							continue
 						} else {
 							log.Error(err)
@@ -141,6 +147,7 @@ func (database *Database) WatchEvents(tables map[string]SourceTable, interval in
 					fn(e)
 
 				}
+				rows.Close()
 
 				// delay
 				time.Sleep(time.Duration(database.dbInfo.Interval) * time.Second)
@@ -153,7 +160,11 @@ func (database *Database) WatchEvents(tables map[string]SourceTable, interval in
 
 }
 
-func (database *Database) DoInitialLoad(tables map[string]SourceTable, fn func(*CDCEvent)) error {
+func (database *Database) DoInitialLoad(tables map[string]SourceTable, fn func(*CDCEvent), initialLoadBatchSize int, interval int) error {
+
+	if initialLoadBatchSize == 0 {
+		initialLoadBatchSize = 100000
+	}
 
 	for tableName, _ := range tables {
 		//get tableInfo
@@ -166,35 +177,102 @@ func (database *Database) DoInitialLoad(tables map[string]SourceTable, fn func(*
 
 		tableInfo = database.tableInfo[tableName]
 
-		log.Info("Start initial load.")
-
-		// query
-		sqlStr := fmt.Sprintf(`SELECT * FROM %s`,
-			//database.dbInfo.DbName,
+		//get total amount
+		sqlStr := fmt.Sprintf(`SELECT COUNT(*) FROM %s`,
 			tableName,
 		)
 
-		log.Info(sqlStr)
-		rows, err := database.db.Queryx(sqlStr)
+		log.Debug(sqlStr)
+		var t interface{}
+		var total int64
+		err := database.db.Get(&t, sqlStr)
 		if err != nil {
 			log.Error(err)
 		}
 
-		i := 0
-		for rows.Next() {
-			// parse data
-			event := make(map[string]interface{}, 0)
-			err := rows.MapScan(event)
+		if float64Val, ok := t.(float64); ok {
+			total = int64(float64Val)
+
+		}
+		if int64Val, ok := t.(int64); ok {
+			total = int64Val
+		}
+		if strVal, ok := t.(string); ok {
+			if t, err := strconv.ParseInt(strVal, 10, 64); err == nil {
+				total = t
+			}
+		}
+
+		bulkSize := int64(initialLoadBatchSize)
+		remainder := total % bulkSize
+		amountByBulk := (total - remainder) / bulkSize
+
+		// query
+		// begin transation
+		tx, err := database.db.Beginx()
+		if err != nil {
+			log.Error(err)
+		}
+		defer tx.Rollback()
+
+		// generate cursor
+		_, err = tx.Exec(fmt.Sprintf("DECLARE pagination_cursor CURSOR FOR SELECT * FROM %s ORDER BY ctid", tableName))
+		if err != nil {
+			log.Error("cursor: ", err)
+		}
+
+		for l := int64(1); l <= amountByBulk+1; l++ {
+			if l <= amountByBulk {
+				from := (l - 1) * bulkSize
+				log.Info(fmt.Sprintf("Processing %s initialLoad from %d to %d total: %d", tableName, from, from+bulkSize, total))
+			} else {
+				from := (l - 1) * bulkSize
+				log.Info(fmt.Sprintf("Processing %s initialLoad from %d to %d total: %d", tableName, from, from+remainder, total))
+
+			}
+			rows, err := tx.Queryx(fmt.Sprintf("FETCH FORWARD %d FROM pagination_cursor", bulkSize))
 			if err != nil {
-				log.Error(err)
-				continue
+				log.Error("Fetch :", err)
 			}
 
-			// Prepare CDC event
-			e := database.processSnapshotEvent(tableName, event)
-			i += 1
-			e.LastLSN = fmt.Sprintf("%s-%d", tableName, i)
-			fn(e)
+			i := 0
+			for rows.Next() {
+				// parse data
+				event := make(map[string]interface{}, 0)
+				err := rows.MapScan(event)
+				if err != nil {
+					log.Error("mapScan: ", err)
+					continue
+				}
+
+				// Prepare CDC event
+				e := database.processSnapshotEvent(tableName, event)
+				i += 1
+				e.LastLSN = fmt.Sprintf("%s-%d-%d", tableName, l, i)
+				fn(e)
+			}
+
+			if err := rows.Err(); err != nil {
+				if database.stopping {
+					return nil
+				}
+				log.Error("Initialization Error: ", err)
+				time.Sleep(time.Duration(interval) * time.Second)
+			}
+
+			rows.Close()
+		}
+
+		// close cursor
+		_, err = tx.Exec("CLOSE pagination_cursor")
+		if err != nil {
+			log.Error("close cursor: ", err)
+		}
+
+		// commit transation
+		err = tx.Commit()
+		if err != nil {
+			log.Error("commit: ", err)
 		}
 
 		initialLoadStatusCol := fmt.Sprintf("%s", tableName)
@@ -209,7 +287,7 @@ func (database *Database) DoInitialLoad(tables map[string]SourceTable, fn func(*
 
 }
 
-func (database *Database) StartCDC(tables map[string]SourceTable, initialLoad bool, interval int, fn func(*CDCEvent)) error {
+func (database *Database) StartCDC(tables map[string]SourceTable, initialLoad bool, initialLoadBatchSize int, interval int, fn func(*CDCEvent)) error {
 
 	// Start query record with batch mode
 	for tableName, _ := range tables {
@@ -219,7 +297,7 @@ func (database *Database) StartCDC(tables map[string]SourceTable, initialLoad bo
 	}
 
 	if initialLoad {
-		database.DoInitialLoad(tables, fn)
+		database.DoInitialLoad(tables, fn, initialLoadBatchSize, interval)
 	}
 
 	go database.WatchEvents(tables, interval, fn)
