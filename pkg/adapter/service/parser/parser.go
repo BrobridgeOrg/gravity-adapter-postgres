@@ -9,6 +9,13 @@ import (
 	"time"
 )
 
+type ValueType int32
+
+const (
+	NormalValue ValueType = iota
+	NullValue
+)
+
 var (
 	InvalidErr = errors.New("Invalid Syntax")
 )
@@ -31,6 +38,33 @@ func (p *Parser) unescape(text string) string {
 	text = strings.ReplaceAll(text, "\\,", ",")
 	text = strings.ReplaceAll(text, "''", "'")
 	return text
+}
+
+func (p *Parser) getValue(str string) (ValueType, string, string, error) {
+
+	// Check quote character
+	if str[0] == '\'' {
+		v, cur, err := p.getRawString(str)
+		if err != nil {
+			return NormalValue, "", str, InvalidErr
+		}
+
+		return NormalValue, p.unescape(v), strings.TrimSpace(str[cur:]), nil
+	}
+
+	left := ""
+	v := str
+
+	if i := strings.IndexByte(str, ' '); i >= 0 {
+		v = str[:i]
+		left = strings.TrimSpace(str[i+1:])
+	}
+
+	if v == "null" {
+		return NullValue, "", left, nil
+	}
+
+	return NormalValue, v, left, nil
 }
 
 func (p *Parser) getRawString(text string) (string, int, error) {
@@ -307,46 +341,43 @@ func (p *Parser) parseField(text string) (string, error) {
 		return text, nil
 	}
 
+	// Extract value
+	vt, v, left, err := p.getValue(text)
+	if err != nil {
+		return left, err
+	}
+
+	if vt == NullValue {
+		p.AfterData[fieldName] = nil
+		return left, nil
+	}
+
 	// Getting value
 	switch fieldType {
 	case "boolean":
 
-		// Parse bool
-		if i := strings.IndexByte(text, ' '); i >= 0 {
-			v := text[:i]
-			text = strings.TrimSpace(text[i+1:])
-
-			// Parse
-			val, err := strconv.ParseBool(v)
-			if err != nil {
-				return "", err
-			}
-
-			p.AfterData[fieldName] = val
-
-			return text, nil
+		// Parse
+		val, err := strconv.ParseBool(v)
+		if err != nil {
+			return "", err
 		}
+
+		p.AfterData[fieldName] = val
+
 	case "smallint":
 		fallthrough
 	case "bigint":
 		fallthrough
 	case "integer":
 
-		// Parse integer
-		if i := strings.IndexByte(text, ' '); i >= 0 {
-			v := text[:i]
-			text = strings.TrimSpace(text[i+1:])
-
-			// Parse
-			val, err := strconv.ParseInt(v, 10, 64)
-			if err != nil {
-				return "", err
-			}
-
-			p.AfterData[fieldName] = val
-
-			return text, nil
+		// Parse
+		val, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return "", err
 		}
+
+		p.AfterData[fieldName] = val
+
 	case "real":
 		fallthrough
 	case "numeric":
@@ -354,155 +385,81 @@ func (p *Parser) parseField(text string) (string, error) {
 		fallthrough
 	case "double precision":
 
-		// Parse integer
-		if i := strings.IndexByte(text, ' '); i >= 0 {
-			v := text[:i]
-			text = strings.TrimSpace(text[i+1:])
-
-			// Parse
-			val, err := strconv.ParseFloat(v, 64)
-			if err != nil {
-				return "", err
-			}
-
-			p.AfterData[fieldName] = float64(val)
-
-			return text, nil
-		}
-	case "bytea":
-
-		// Parse string
-		str, cur, err := p.getString(text)
-		if err != nil {
-			return "", err
-		}
-
-		// Convert to bytes
-		data, err := hex.DecodeString(str[2:])
-		if err != nil {
-			return "", err
-		}
-
-		p.AfterData[fieldName] = data
-
-		text = strings.TrimSpace(text[cur:])
-
-		return text, nil
-	case "money":
-
-		// Parse string
-		str, cur, err := p.getString(text)
-		if err != nil {
-			return "", err
-		}
-
-		// Skip dollar sign and parse
-		val, err := strconv.ParseFloat(str[1:], 64)
+		// Parse
+		val, err := strconv.ParseFloat(v, 64)
 		if err != nil {
 			return "", err
 		}
 
 		p.AfterData[fieldName] = val
 
-		text = strings.TrimSpace(text[cur:])
+	case "bytea":
 
-		return text, nil
-	case "timestamp without time zone":
-
-		// Parse string
-		str, cur, err := p.getString(text)
+		// Parse
+		val, err := hex.DecodeString(v[2:])
 		if err != nil {
 			return "", err
 		}
 
-		str = strings.ReplaceAll(str, " ", "T") + "Z"
+		p.AfterData[fieldName] = val
+
+	case "money":
+
+		if v[0] == '$' {
+			v = v[1:]
+		}
+
+		// Parse
+		val, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return "", err
+		}
+
+		p.AfterData[fieldName] = val
+
+	case "timestamp without time zone":
+
+		v = strings.ReplaceAll(v, " ", "T") + "Z"
 
 		// Parse timestamp
-		t, _ := time.Parse(time.RFC3339Nano, str)
+		t, err := time.Parse(time.RFC3339Nano, v)
 		if err != nil {
 			return "", err
 		}
 
 		p.AfterData[fieldName] = t
-
-		text = strings.TrimSpace(text[cur:])
-
-		return text, nil
 
 	case "interval":
 		fallthrough
 	case "time without time zone":
 
-		// Parse string
-		str, cur, err := p.getString(text)
-		if err != nil {
-			return "", err
-		}
-
-		p.AfterData[fieldName] = str
-
-		text = strings.TrimSpace(text[cur:])
-
-		return text, nil
+		p.AfterData[fieldName] = v
 
 	case "date":
 
-		// Parse string
-		str, cur, err := p.getString(text)
-		if err != nil {
-			return "", err
-		}
-
-		// Parse timestamp
-		t, _ := time.Parse("2006-01-02", str)
+		// Parse date
+		t, _ := time.Parse("2006-01-02", v)
 		if err != nil {
 			return "", err
 		}
 
 		p.AfterData[fieldName] = t
 
-		text = strings.TrimSpace(text[cur:])
-
-		return text, nil
-
 	case "bit":
 		fallthrough
 	case "bit varying":
 
-		if text[0] != 'B' {
+		if v[0] != 'B' {
 			return text, InvalidErr
 		}
 
-		text = text[1:]
-
-		// Parse string
-		str, cur, err := p.getString(text)
-		if err != nil {
-			return "", err
-		}
-
-		p.AfterData[fieldName] = str
-
-		text = strings.TrimSpace(text[cur:])
-
-		return text, nil
+		p.AfterData[fieldName] = v[2 : len(v)-1]
 
 	default:
-
-		// Parse string
-		str, cur, err := p.getString(text)
-		if err != nil {
-			return "", err
-		}
-
-		p.AfterData[fieldName] = str
-
-		text = strings.TrimSpace(text[cur:])
-
-		return text, nil
+		p.AfterData[fieldName] = v
 	}
 
-	return "", nil
+	return left, nil
 }
 
 func (p *Parser) parseFields(text string) error {

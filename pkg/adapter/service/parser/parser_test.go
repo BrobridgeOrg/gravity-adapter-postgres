@@ -48,7 +48,7 @@ func TestParseTable(t *testing.T) {
 
 func TestParseInsertOperation(t *testing.T) {
 
-	source := `table public.users: INSERT: id[integer]:1 name[character]:'aaaaaa ' email[character]:'bbbbbbbb ' btest[bytea]:'\\x013d7d16d7ad4fefb61bd95b765c8ceb'`
+	source := `table public.users: INSERT: id[integer]:1 name[character]:'aaaaaa ' email[character]:'bbbbbbbb ' btest[bytea]:'\\x013d7d16d7ad4fefb61bd95b765c8ceb' nulltest[character]:null`
 
 	parser := NewParser()
 
@@ -184,6 +184,76 @@ func TestParseStringTypes(t *testing.T) {
 	assert.Equal(t, "a ", parser.AfterData["name"].(string))
 	assert.Equal(t, "bbbb", parser.AfterData["email"].(string))
 	assert.Equal(t, "abc", parser.AfterData["text1"].(string))
+}
+
+func TestParseBooleanTypes(t *testing.T) {
+
+	source := `table public.users: INSERT: field1[boolean]:true field2[boolean]:true`
+
+	parser := NewParser()
+
+	err := parser.Parse(source)
+	if err != nil {
+		t.Error(err)
+	}
+
+	assert.Equal(t, true, parser.AfterData["field1"].(bool))
+	assert.Equal(t, true, parser.AfterData["field2"].(bool))
+}
+
+func TestParseByteaTypes(t *testing.T) {
+
+	source := `table public.users: INSERT: btest[bytea]:'\\x013d7d16d7ad4fefb61bd95b765c8ceb'`
+
+	parser := NewParser()
+
+	err := parser.Parse(source)
+	if err != nil {
+		t.Error(err)
+	}
+
+	bytesResult, _ := hex.DecodeString("013d7d16d7ad4fefb61bd95b765c8ceb")
+	assert.Equal(t, bytesResult, parser.AfterData["btest"].([]byte))
+}
+
+func TestParseIntegerTypes(t *testing.T) {
+
+	source := `table public.users: INSERT: id[integer]:3 smallint1[smallint]:1 bigint1[bigint]:5 smallserial1[smallint]:1 serial1[integer]:1 bigserial1[bigint]:1`
+
+	parser := NewParser()
+
+	err := parser.Parse(source)
+	if err != nil {
+		t.Error(err)
+	}
+
+	// Integer
+	assert.Equal(t, int64(1), parser.AfterData["smallint1"].(int64))
+	assert.Equal(t, int64(5), parser.AfterData["bigint1"].(int64))
+	assert.Equal(t, int64(3), parser.AfterData["id"].(int64))
+	assert.Equal(t, int64(1), parser.AfterData["smallserial1"].(int64))
+	assert.Equal(t, int64(1), parser.AfterData["serial1"].(int64))
+	assert.Equal(t, int64(1), parser.AfterData["bigserial1"].(int64))
+}
+
+func TestParseFloatTypes(t *testing.T) {
+
+	source := `table public.users: INSERT: float1[double precision]:2 real1[real]:3 numeric1[numeric]:4.1 decimal1[numeric]:6 money[money]:'$30.00' double1[double precision]:7`
+
+	parser := NewParser()
+
+	err := parser.Parse(source)
+	if err != nil {
+		t.Error(err)
+	}
+
+	// Float
+	assert.Equal(t, float64(2), parser.AfterData["float1"].(float64))
+	assert.Equal(t, float64(3), parser.AfterData["real1"].(float64))
+	assert.Equal(t, float64(4.1), parser.AfterData["numeric1"].(float64))
+	assert.Equal(t, float64(6), parser.AfterData["decimal1"].(float64))
+	assert.Equal(t, float64(7), parser.AfterData["double1"].(float64))
+	assert.Equal(t, float64(30.00), parser.AfterData["money"].(float64))
 }
 
 func TestParseTimeTypes(t *testing.T) {
