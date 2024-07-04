@@ -2,12 +2,10 @@ package instance
 
 import (
 	"fmt"
+	"time"
 
 	gravity_adapter "github.com/BrobridgeOrg/gravity-sdk/v2/adapter"
 	"github.com/BrobridgeOrg/gravity-sdk/v2/core"
-
-	//"github.com/BrobridgeOrg/gravity-sdk/core/keyring"
-	"time"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
@@ -69,29 +67,6 @@ func (a *AppInstance) initAdapterConnector() error {
 	if err != nil {
 		return err
 	}
-
-	/*
-		// Loading access key
-		viper.SetDefault("adapter.appID", "anonymous")
-		viper.SetDefault("adapter.accessKey", "")
-		opts.Key = keyring.NewKey(viper.GetString("adapter.appID"), viper.GetString("adapter.accessKey"))
-
-		a.adapterConnector = gravity_adapter.NewAdapterConnectorWithClient(client, opts)
-
-		// Register adapter
-		adapterID := viper.GetString("adapter.adapterID")
-		adapterName := viper.GetString("adapter.adapterName")
-
-		log.WithFields(log.Fields{
-			"id":   adapterID,
-			"name": adapterName,
-		}).Info("Registering adapter")
-
-		err = a.adapterConnector.Register("postgres", adapterID, adapterName)
-		if err != nil {
-			return err
-		}
-	*/
 
 	return nil
 }

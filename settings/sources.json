@@ -22,6 +22,14 @@
 						"update": "accountUpdated",
 						"delete": "accountDeleted"
 					}
+				},
+				"public.account1":{
+					"events": {
+						"snapshot": "account1Initialized",
+						"create": "account1Created",
+						"update": "account1Updated",
+						"delete": "account1Deleted"
+					}
 				}
 			}
 		}

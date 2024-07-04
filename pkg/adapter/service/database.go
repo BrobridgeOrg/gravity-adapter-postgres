@@ -98,74 +98,69 @@ func (database *Database) WatchEvents(tables map[string]SourceTable, interval in
 
 	log.Info("Start watch event.")
 
-	for tableName, _ := range tables {
+	go func() {
+		for {
+			// query
+			sqlStr := fmt.Sprintf(`SELECT * FROM pg_logical_slot_get_changes('%s', NULL, NULL);`,
+				database.dbInfo.SlotName,
+			)
 
-		//get tableInfo
-		//tableInfo := database.tableInfo[tableName]
-		go func(tableName string) {
-			for {
-				// query
-				sqlStr := fmt.Sprintf(`SELECT * FROM pg_logical_slot_get_changes('%s', NULL, NULL);`,
-					database.dbInfo.SlotName,
-				)
+			//log.Info(sqlStr)
+			rows, err := database.db.Queryx(sqlStr)
+			if err != nil {
+				log.Error("slot: ", err)
+				time.Sleep(time.Duration(database.dbInfo.Interval) * time.Second)
+				continue
+			}
 
-				//log.Info(sqlStr)
-				rows, err := database.db.Queryx(sqlStr)
+			for rows.Next() {
+				// parse data
+				event := make(map[string]interface{}, 0)
+				err := rows.MapScan(event)
 				if err != nil {
-					log.Error("slot: ", err)
-					time.Sleep(time.Duration(database.dbInfo.Interval) * time.Second)
+					log.Error(err)
 					continue
 				}
 
-				for rows.Next() {
-					// parse data
-					event := make(map[string]interface{}, 0)
-					err := rows.MapScan(event)
-					if err != nil {
+				var e *CDCEvent
+				// Prepare CDC event
+				e, err = database.processEvent(event)
+				if err != nil {
+					if err == UnsupportEventTypeErr {
+						log.Debug("Skip event ...")
+						continue
+					} else if err == EmptyEventTypeErr {
+						continue
+					} else {
 						log.Error(err)
+						// delay
+						timer := time.NewTimer(1 * time.Second)
+						<-timer.C
 						continue
 					}
-
-					var e *CDCEvent
-					// Prepare CDC event
-					e, err = database.processEvent(tableName, event)
-					if err != nil {
-						if err == UnsupportEventTypeErr {
-							log.Debug("Skip event ...")
-							continue
-						} else if err == EmptyEventTypeErr {
-							continue
-						} else {
-							log.Error(err)
-							// delay
-							timer := time.NewTimer(1 * time.Second)
-							<-timer.C
-							continue
-						}
-					}
-
-					fn(e)
-
 				}
-				rows.Close()
 
-				// delay
-				time.Sleep(time.Duration(database.dbInfo.Interval) * time.Second)
-				continue
+				fn(e)
 
 			}
-		}(tableName)
-	}
+			rows.Close()
+
+			// delay
+			time.Sleep(time.Duration(database.dbInfo.Interval) * time.Second)
+		}
+	}()
+
 	return nil
 
 }
 
-func (database *Database) DoInitialLoad(tables map[string]SourceTable, fn func(*CDCEvent), initialLoadBatchSize int, interval int) error {
+func (database *Database) DoInitialLoad(sourceName string, tables map[string]SourceTable, fn func(*CDCEvent), initialLoadBatchSize int, interval int) error {
 
 	if initialLoadBatchSize == 0 {
 		initialLoadBatchSize = 100000
 	}
 
+	regenSlot := false
 	for tableName, _ := range tables {
 		//get tableInfo
 		tableInfo := database.tableInfo[tableName]
@@ -174,6 +169,7 @@ func (database *Database) DoInitialLoad(tables map[string]SourceTable, fn func(*
 		if tableInfo.initialLoaded {
 			continue
 		}
+		regenSlot = true
 
 		tableInfo = database.tableInfo[tableName]
 
@@ -225,10 +221,11 @@ func (database *Database) DoInitialLoad(tables map[string]SourceTable, fn func(*
 			if l <= amountByBulk {
 				from := (l - 1) * bulkSize
 				log.Info(fmt.Sprintf("Processing %s initialLoad from %d to %d total: %d", tableName, from, from+bulkSize, total))
-			} else {
+			} else if remainder != 0 {
 				from := (l - 1) * bulkSize
 				log.Info(fmt.Sprintf("Processing %s initialLoad from %d to %d total: %d", tableName, from, from+remainder, total))
-
+			} else {
+				continue
 			}
 			rows, err := tx.Queryx(fmt.Sprintf("FETCH FORWARD %d FROM pagination_cursor", bulkSize))
 			if err != nil {
@@ -248,7 +245,7 @@ func (database *Database) DoInitialLoad(tables map[string]SourceTable, fn func(*
 				// Prepare CDC event
 				e := database.processSnapshotEvent(tableName, event)
 				i += 1
-				e.LastLSN = fmt.Sprintf("%s-%d-%d", tableName, l, i)
+				e.LastLSN = fmt.Sprintf("%s-%s-%d-%d", sourceName, tableName, l, i)
 				fn(e)
 			}
 
@@ -275,19 +272,49 @@ func (database *Database) DoInitialLoad(tables map[string]SourceTable, fn func(*
 			log.Error("commit: ", err)
 		}
 
-		initialLoadStatusCol := fmt.Sprintf("%s", tableName)
+		initialLoadStatusCol := fmt.Sprintf("%s-%s", sourceName, tableName)
 		err = database.source.store.PutInt64("status", []byte(initialLoadStatusCol), 1)
 		if err != nil {
 			log.Error("Failed to update status")
 		}
+		log.Info(tableName, " initialLoad done.")
 
+	}
+
+	if regenSlot {
+		// Re-gen slot
+		err := database.regenerateSlot()
+		if err != nil {
+			log.Error(err)
+		}
+		log.Info("Re-generate slot: ", database.dbInfo.SlotName)
 	}
 
 	return nil
 
 }
 
-func (database *Database) StartCDC(tables map[string]SourceTable, initialLoad bool, initialLoadBatchSize int, interval int, fn func(*CDCEvent)) error {
+func (database *Database) regenerateSlot() error {
+	// drop
+	log.Debug("Drop Slot")
+	sqlStr := fmt.Sprintf(`SELECT pg_drop_replication_slot('%s')`,
+		database.dbInfo.SlotName,
+	)
+	database.db.Exec(sqlStr)
+
+	// create
+	log.Debug("Create Slot")
+	sqlStr = fmt.Sprintf(`SELECT * FROM pg_create_logical_replication_slot('%s', 'test_decoding')`,
+		database.dbInfo.SlotName,
+	)
+	_, err := database.db.Exec(sqlStr)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (database *Database) StartCDC(sourceName string, tables map[string]SourceTable, initialLoad bool, initialLoadBatchSize int, interval int, fn func(*CDCEvent)) error {
 
 	// Start query record with batch mode
 	for tableName, _ := range tables {
@@ -297,7 +324,7 @@ func (database *Database) StartCDC(tables map[string]SourceTable, initialLoad bo
 	}
 
 	if initialLoad {
-		database.DoInitialLoad(tables, fn, initialLoadBatchSize, interval)
+		database.DoInitialLoad(sourceName, tables, fn, initialLoadBatchSize, interval)
 	}
 
 	go database.WatchEvents(tables, interval, fn)

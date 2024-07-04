@@ -31,7 +31,7 @@ type CDCEvent struct {
 	LastLSN   string
 }
 
-func (database *Database) processEvent(tableName string, event map[string]interface{}) (*CDCEvent, error) {
+func (database *Database) processEvent(event map[string]interface{}) (*CDCEvent, error) {
 
 	// Parse event
 	p := parser.NewParser()

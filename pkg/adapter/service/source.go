@@ -133,7 +133,7 @@ func (source *Source) parseEventName(event *CDCEvent) string {
 	// determine event name
 	tableInfo, ok := source.tables[event.Table]
 	if !ok {
-		return eventName
+		return ""
 	}
 
 	switch event.Operation {
@@ -191,7 +191,7 @@ func (source *Source) Init() error {
 				return err
 			}
 			// Getting last Time
-			initialLoadStatusCol := fmt.Sprintf("%s", tableName)
+			initialLoadStatusCol := fmt.Sprintf("%s-%s", source.name, tableName)
 			initialLoadStatus, err = source.store.GetInt64("status", []byte(initialLoadStatusCol))
 			if err != nil {
 				log.Error(err)
@@ -220,6 +220,8 @@ func (source *Source) Init() error {
 	go source.eventReceiver()
 	go source.requestHandler()
 
+	time.Sleep(time.Second)
+
 	// Getting tables
 	tables := make([]string, 0, len(source.tables))
 	for tableName, _ := range source.tables {
@@ -232,8 +234,8 @@ func (source *Source) Init() error {
 
 	log.Info("Ready to start CDC, tables: ", tables)
 	//err = source.database.StartCDC(source.tables, source.info.InitialLoad, source.info.Interval, func(event *CDCEvent) {
-	go func(tables map[string]SourceTable, initialLoad bool, initialLoadBatchSize int, interval int) {
-		err = source.database.StartCDC(tables, initialLoad, initialLoadBatchSize, interval, func(event *CDCEvent) {
+	go func(sourceName string, tables map[string]SourceTable, initialLoad bool, initialLoadBatchSize int, interval int) {
+		err = source.database.StartCDC(sourceName, tables, initialLoad, initialLoadBatchSize, interval, func(event *CDCEvent) {
 
 			eventName := source.parseEventName(event)
 
@@ -248,7 +250,7 @@ func (source *Source) Init() error {
 		if err != nil {
 			log.Fatal(err)
 		}
-	}(source.tables, source.info.InitialLoad, source.info.InitialLoadBatchSize, source.info.Interval)
+	}(source.name, source.tables, source.info.InitialLoad, source.info.InitialLoadBatchSize, source.info.Interval)
 
 	return nil
 }
