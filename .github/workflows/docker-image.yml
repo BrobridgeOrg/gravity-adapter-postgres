@@ -39,6 +39,8 @@ jobs:
       with:
         context: .
         file: ./build/docker/Dockerfile
+        build-args: |
+          AES_KEY=${{ secrets.AES_KEY }}
         push: true
         tags: ${{ steps.meta.outputs.tags }}
 

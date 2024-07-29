@@ -1,14 +1,16 @@
 FROM golang:1.21-alpine3.19 AS builder
 
+ARG AES_KEY="********************************"
+
 WORKDIR /
 
 COPY . .
 
 RUN apk add --update build-base && apk upgrade --available
-RUN go build -o /gravity-adapter-postgres ./cmd/gravity-adapter-postgres/gravity-adapter-postgres.go
+RUN go build -ldflags "-X git.brobridge.com/gravity/gravity-adapter-postgres/pkg/adapter/service.aesKey=$AES_KEY" -o /gravity-adapter-postgres ./cmd/gravity-adapter-postgres/gravity-adapter-postgres.go
 
 RUN cd /build/docker/pwd_encrypt && \
-        go build -o /pwd_encrypt
+        go build -ldflags "-X main.aesKey=$AES_KEY" -o /pwd_encrypt
 
 FROM alpine:3.19.2
 WORKDIR /
