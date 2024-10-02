@@ -5,7 +5,7 @@ go 1.21
 require (
 	github.com/BrobridgeOrg/broton v0.0.7
 	github.com/BrobridgeOrg/gravity-sdk/v2 v2.0.4
-	github.com/cfsghost/parallel-chunked-flow v0.0.6
+	github.com/cfsghost/parallel-chunked-flow v0.0.7
 	github.com/jmoiron/sqlx v1.3.4
 	github.com/json-iterator/go v1.1.12
 	github.com/lib/pq v1.10.1
