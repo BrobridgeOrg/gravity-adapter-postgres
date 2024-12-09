@@ -3,6 +3,7 @@ package adapter
 import (
 	"context"
 	"fmt"
+	"golang.org/x/time/rate"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -32,6 +33,7 @@ type Source struct {
 	stopping         bool
 	ackFutures       []nats.PubAckFuture
 	publishBatchSize uint64
+	rateLimiter      *rate.Limiter
 }
 
 type Packet struct {
@@ -76,6 +78,8 @@ func NewSource(adapter *Adapter, name string, sourceInfo *SourceInfo) *Source {
 
 	viper.SetDefault("gravity.publishBatchSize", 1000)
 	publishBatchSize := viper.GetUint64("gravity.publishBatchSize")
+	viper.SetDefault("gravity.rateLimit", 0)
+	rateLimit := viper.GetFloat64("gravity.rateLimit")
 
 	// required channel
 	if len(sourceInfo.Host) == 0 {
@@ -108,6 +112,13 @@ func NewSource(adapter *Adapter, name string, sourceInfo *SourceInfo) *Source {
 		tables[tableName] = config
 	}
 
+	limit := rate.Inf
+	if rateLimit != 0 {
+		limit = rate.Limit(rateLimit)
+	}
+	limiter := rate.NewLimiter(limit, int(rateLimit))
+	log.Info("Rate Limit: ", limiter.Limit())
+
 	source := &Source{
 		adapter:          adapter,
 		info:             sourceInfo,
@@ -119,6 +130,7 @@ func NewSource(adapter *Adapter, name string, sourceInfo *SourceInfo) *Source {
 		stopping:         false,
 		ackFutures:       make([]nats.PubAckFuture, 0, publishBatchSize),
 		publishBatchSize: publishBatchSize,
+		rateLimiter:      limiter,
 	}
 
 	// Initialize parapllel chunked flow
@@ -358,6 +370,7 @@ func (source *Source) HandleRequest(request *Request) {
 	log.Trace("Nats-Msg-Id: ", meta["Nats-Msg-Id"])
 	for {
 		// Using new SDK to re-implement this part
+		source.rateLimiter.Wait(context.Background())
 		future, err := source.connector.PublishAsync(request.Req.EventName, request.Req.Payload, meta)
 		if err != nil {
 			log.Error("Failed to get publish Request:", err)
