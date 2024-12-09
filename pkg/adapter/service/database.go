@@ -3,12 +3,19 @@ package adapter
 import (
 	"fmt"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
 	log "github.com/sirupsen/logrus"
 )
+
+var eventPool = sync.Pool{
+	New: func() interface{} {
+		return make(map[string]interface{})
+	},
+}
 
 type DatabaseInfo struct {
 	Host     string `json:"host"`
@@ -115,7 +122,7 @@ func (database *Database) WatchEvents(tables map[string]SourceTable, interval in
 
 			for rows.Next() {
 				// parse data
-				event := make(map[string]interface{}, 0)
+				event := eventPool.Get().(map[string]interface{})
 				err := rows.MapScan(event)
 				if err != nil {
 					log.Error(err)
@@ -141,6 +148,7 @@ func (database *Database) WatchEvents(tables map[string]SourceTable, interval in
 				}
 
 				fn(e)
+				eventPool.Put(event)
 
 			}
 			rows.Close()
@@ -235,7 +243,7 @@ func (database *Database) DoInitialLoad(sourceName string, tables map[string]Sou
 			i := 0
 			for rows.Next() {
 				// parse data
-				event := make(map[string]interface{}, 0)
+				event := eventPool.Get().(map[string]interface{})
 				err := rows.MapScan(event)
 				if err != nil {
 					log.Error("mapScan: ", err)
@@ -247,6 +255,7 @@ func (database *Database) DoInitialLoad(sourceName string, tables map[string]Sou
 				i += 1
 				e.LastLSN = fmt.Sprintf("%s-%s-%d-%d", sourceName, tableName, l, i)
 				fn(e)
+				eventPool.Put(event)
 			}
 
 			if err := rows.Err(); err != nil {

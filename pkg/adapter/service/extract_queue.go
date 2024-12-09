@@ -3,6 +3,7 @@ package adapter
 import (
 	"errors"
 	"fmt"
+	"sync"
 
 	parser "git.brobridge.com/gravity/gravity-adapter-postgres/pkg/adapter/service/parser"
 	log "github.com/sirupsen/logrus"
@@ -31,6 +32,12 @@ type CDCEvent struct {
 	LastLSN   string
 }
 
+var cdcEventPool = sync.Pool{
+	New: func() interface{} {
+		return &CDCEvent{}
+	},
+}
+
 func (database *Database) processEvent(event map[string]interface{}) (*CDCEvent, error) {
 
 	// Parse event
@@ -42,10 +49,9 @@ func (database *Database) processEvent(event map[string]interface{}) (*CDCEvent,
 	}
 
 	// Prepare CDC event
-	e := &CDCEvent{
-		Table: p.Table,
-		After: p.AfterData,
-	}
+	e := cdcEventPool.Get().(*CDCEvent)
+	e.Table = p.Table
+	e.After = p.AfterData
 
 	switch p.Operation {
 	case "INSERT":
@@ -77,11 +83,11 @@ func (database *Database) processSnapshotEvent(tableName string, eventPayload ma
 		afterValue[key] = value
 	}
 
-	result := CDCEvent{
-		Operation: SnapshotOperation,
-		Table:     tableName,
-		After:     afterValue,
-	}
-	return &result
+	result := cdcEventPool.Get().(*CDCEvent)
+	result.Operation = SnapshotOperation
+	result.Table = tableName
+	result.After = afterValue
+
+	return result
 
 }
